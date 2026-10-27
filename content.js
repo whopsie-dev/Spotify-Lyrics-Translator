@@ -370,19 +370,28 @@
     const n = m.target;
     const el = n.nodeType === 1 ? n : n.parentElement;
     if (el && el.closest && el.closest('.slt-tr, #slt-toast')) return true;
-    return (
-      m.type === 'childList' &&
-      m.removedNodes.length === 0 &&
-      m.addedNodes.length > 0 &&
-      [...m.addedNodes].every((x) => x.nodeType === 1 && (x.classList.contains('slt-tr') || x.id === 'slt-toast'))
-    );
+    if (m.type !== 'childList') return false;
+    const nodes = [...m.addedNodes, ...m.removedNodes];
+    if (nodes.length === 0) return true;
+    return nodes.every((x) => x.nodeType === 1 && ((x.classList && x.classList.contains('slt-tr')) || x.id === 'slt-toast'));
   }
+
+  function restoreNow() {
+  if (!state.map) return false;
+  const els = findLines();
+  if (!els) return false;
+  const texts = els.map(getText);
+  if (hash(settings.target + '\n' + texts.join('\n')) !== state.key) return false;
+  applyAll(els, texts);
+  return true;
+}
 
   function init() {
     applyVars();
     new MutationObserver((muts) => {
       if (muts.every(isOwn)) return;
-      schedule();
+      if (!state.map) { schedule(); return; }
+      if (!restoreNow()) schedule();
     }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
     window.addEventListener('resize', () => {
