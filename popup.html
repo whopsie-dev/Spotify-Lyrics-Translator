@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spotify Lyrics Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <div class="row">
+      <label for="target">Translate to</label>
+      <select id="target"></select>
+    </div>
+
+    <div class="row">
+      <label for="auto">Translate automatically</label>
+      <span class="switch"><input type="checkbox" id="auto"><span></span></span>
+    </div>
+
+    <div class="slider">
+      <label for="fontSize">Font size</label>
+      <div class="track"><input type="range" id="fontSize" min="50" max="150" step="1"><output id="fontSizeV"></output></div>
+    </div>
+    <div class="slider">
+      <label for="opacity">Opacity</label>
+      <div class="track"><input type="range" id="opacity" min="10" max="100" step="1"><output id="opacityV"></output></div>
+    </div>
+    <div class="slider">
+      <label for="lineSpacing">Line spacing</label>
+      <div class="track"><input type="range" id="lineSpacing" min="0" max="100" step="1"><output id="lineSpacingV"></output></div>
+    </div>
+
+    <div class="row">
+      <label for="italic">Italic style for translated text</label>
+      <span class="switch"><input type="checkbox" id="italic"><span></span></span>
+    </div>
+
+    <button type="button" class="link" id="defaults">Reset to defaults</button>
+
+    <h2>Other</h2>
+    <div class="row">
+      <label for="onlyTranslated">Show only translated text</label>
+      <span class="switch"><input type="checkbox" id="onlyTranslated"><span></span></span>
+    </div>
+    <div class="buttons">
+      <button type="button" class="pill" id="translate">Translate text</button>
+      <button type="button" class="pill" id="reset">Reset translation</button>
+    </div>
+    <p id="status" role="status"></p>
+
+    <h2>Keyboard shortcuts</h2>
+    <div class="row"><span>Translate lyrics</span><kbd>Alt+T</kbd></div>
+    <div class="row"><span>Show/hide original</span><kbd>Alt+H</kbd></div>
+    <div class="row"><span>Reset translation</span><kbd>Alt+R</kbd></div>
+
+    <footer>
+      <span id="cacheCount"></span>
+      <button type="button" class="link" id="clearCache">Clear cache</button>
+    </footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
