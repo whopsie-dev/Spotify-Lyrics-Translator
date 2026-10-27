@@ -16,6 +16,8 @@ Open an issue with:
 - Expected vs. actual behaviour
 - Browser version and OS
 
+You can also message **@xocn** on Discord, or join the Discord server at [https://discord.gg/CKCvBckGVJ](https://discord.gg/CKCvBckGVJ).
+
 ## Pull Requests
 
 - Keep changes focused — one feature or fix per PR

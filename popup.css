@@ -93,6 +93,12 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 #status { min-height: 18px; margin-top: 8px; color: #f15e6c; font-size: 12px; }
 
+.contact { margin-bottom: 4px; color: #b3b3b3; font-size: 12px; line-height: 1.7; }
+.contact strong { color: #fff; }
+.contact a { color: #1ed760; text-decoration: none; }
+.contact a:hover { text-decoration: underline; }
+.contact a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-radius: 2px; }
+
 kbd {
   padding: 3px 9px;
   border: 1px solid #3e3e3e;

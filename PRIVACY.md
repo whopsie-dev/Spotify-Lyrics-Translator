@@ -33,5 +33,5 @@ If this policy changes, the update will be reflected in this file in the reposit
 
 ## Contact
 
-If you have questions, open an issue on the GitHub repository.
+If you have questions, open an issue on the GitHub repository, message **@xocn** on Discord, or join the Discord server at [https://discord.gg/CKCvBckGVJ](https://discord.gg/CKCvBckGVJ).
 

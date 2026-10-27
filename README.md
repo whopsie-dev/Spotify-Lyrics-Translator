@@ -6,6 +6,8 @@ A Chrome extension that shows translated lyrics below the original lines on the 
 ![Manifest V3](https://img.shields.io/badge/manifest-v3-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+> **Questions, feedback or bug reports?** Message **@xocn** on Discord, or [join the Discord server](https://discord.gg/CKCvBckGVJ).
+
 ## Features
 
 - **Inline translations** — translated text appears directly under each lyric line
@@ -85,6 +87,13 @@ No data is collected. Lyric text is sent to Google Translate for translation; no
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Support & Contact
+
+Need help, found a bug, or have a feature request? Reach out on Discord:
+
+- **Discord:** `@xocn`
+- **Discord server:** [https://discord.gg/CKCvBckGVJ](https://discord.gg/CKCvBckGVJ)
 
 ## License
 
