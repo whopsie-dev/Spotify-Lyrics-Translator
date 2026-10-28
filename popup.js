@@ -5,7 +5,10 @@ const DEFAULTS = {
   opacity: 80,
   lineSpacing: 0,
   italic: true,
-  onlyTranslated: false
+  onlyTranslated: false,
+  findLyrics: true,
+  autoShowFound: false,
+  fallbackTranslators: true
 };
 
 const LANGS = [
@@ -23,7 +26,7 @@ const LANGS = [
 
 const $ = (id) => document.getElementById(id);
 const SLIDERS = ['fontSize', 'opacity', 'lineSpacing'];
-const TOGGLES = ['auto', 'italic', 'onlyTranslated'];
+const TOGGLES = ['auto', 'italic', 'onlyTranslated', 'findLyrics', 'autoShowFound', 'fallbackTranslators'];
 let s = { ...DEFAULTS };
 
 function paint(el) {
@@ -35,6 +38,7 @@ function paint(el) {
 function render() {
   $('target').value = s.target;
   TOGGLES.forEach((id) => { $(id).checked = !!s[id]; });
+  $('autoShowFound').disabled = !s.findLyrics;
   SLIDERS.forEach((id) => { $(id).value = s[id]; paint($(id)); });
 }
 
@@ -48,9 +52,9 @@ async function toTab(msg) {
 }
 
 async function refreshCount() {
-  const { cacheIndex = [] } = await chrome.storage.local.get('cacheIndex');
-  const n = cacheIndex.length;
-  $('cacheCount').textContent = n === 1 ? '1 song cached' : `${n} songs cached`;
+  const { cacheIndex = [], lyricsIndex = [] } = await chrome.storage.local.get(['cacheIndex', 'lyricsIndex']);
+  const n = cacheIndex.length + lyricsIndex.length;
+  $('cacheCount').textContent = n === 1 ? '1 item cached' : `${n} items cached`;
 }
 
 async function action(type) {
@@ -62,6 +66,7 @@ async function action(type) {
 
 (async function init() {
   $('target').innerHTML = LANGS.map(([c, n]) => `<option value="${c}">${n}</option>`).join('');
+  $('extVersion').textContent = 'v' + chrome.runtime.getManifest().version;
 
   const { settings } = await chrome.storage.local.get('settings');
   s = { ...DEFAULTS, ...(settings || {}) };
@@ -69,7 +74,11 @@ async function action(type) {
   refreshCount();
 
   $('target').addEventListener('change', (e) => { s.target = e.target.value; save(); });
-  TOGGLES.forEach((id) => $(id).addEventListener('change', (e) => { s[id] = e.target.checked; save(); }));
+  TOGGLES.forEach((id) => $(id).addEventListener('change', (e) => {
+    s[id] = e.target.checked;
+    if (id === 'findLyrics') $('autoShowFound').disabled = !s.findLyrics;
+    save();
+  }));
   SLIDERS.forEach((id) => $(id).addEventListener('input', (e) => {
     s[id] = Number(e.target.value);
     paint(e.target);
@@ -83,14 +92,15 @@ async function action(type) {
   });
   $('translate').addEventListener('click', () => action('translate-now'));
   $('reset').addEventListener('click', () => action('reset'));
+  $('find').addEventListener('click', () => action('find-lyrics-now'));
 
   $('clearCache').addEventListener('click', async () => {
     const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith('song:'));
-    await chrome.storage.local.remove([...keys, 'cacheIndex']);
+    const keys = Object.keys(all).filter((k) => k.startsWith('song:') || k.startsWith('lyrics:'));
+    await chrome.storage.local.remove([...keys, 'cacheIndex', 'lyricsIndex']);
     refreshCount();
   });
 
-  chrome.storage.onChanged.addListener((c) => { if (c.cacheIndex) refreshCount(); });
+  chrome.storage.onChanged.addListener((c) => { if (c.cacheIndex || c.lyricsIndex) refreshCount(); });
 })();
 

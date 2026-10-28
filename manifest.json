@@ -1,12 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Spotify Lyrics Translator",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Shows translated lyrics under the original lines on the Spotify web player. Translations are cached locally.",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
     "https://open.spotify.com/*",
-    "https://translate.googleapis.com/*"
+    "https://translate.googleapis.com/*",
+    "https://mozhi.aryak.me/*",
+    "https://mozhi.ducks.party/*",
+    "https://translate.projectsegfau.lt/*",
+    "https://lingva.ml/*",
+    "https://lrclib.net/*"
   ],
   "background": { "service_worker": "background.js" },
   "content_scripts": [

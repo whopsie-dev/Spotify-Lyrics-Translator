@@ -50,6 +50,8 @@ select {
 .switch input:checked + span { background: #1ed760; }
 .switch input:checked + span::after { transform: translateX(18px); }
 .switch input:focus-visible + span { outline: 2px solid #fff; outline-offset: 2px; }
+.switch input:disabled { cursor: not-allowed; }
+.switch input:disabled + span { opacity: 0.4; }
 
 .slider { padding: 6px 0 8px; color: #b3b3b3; }
 .slider label { display: block; margin-bottom: 6px; }
@@ -90,6 +92,7 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 }
 .pill:hover { border-color: #fff; transform: scale(1.02); }
 .pill:active { transform: scale(0.98); }
+.pill.wide { width: 100%; margin-top: 8px; }
 
 #status { min-height: 18px; margin-top: 8px; color: #f15e6c; font-size: 12px; }
 

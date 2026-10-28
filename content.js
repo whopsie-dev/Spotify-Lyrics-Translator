@@ -10,7 +10,10 @@
     opacity: 80,
     lineSpacing: 0,
     italic: true,
-    onlyTranslated: false
+    onlyTranslated: false,
+    findLyrics: true,
+    autoShowFound: false,
+    fallbackTranslators: true
   };
   let settings = { ...DEFAULTS };
 
@@ -19,6 +22,8 @@
     map: null,
     job: 0,
     startTimer: null,
+    waitTimer: null,
+    pending: null,
     scanTimer: null,
     toastTimer: null,
     suppressed: null,
@@ -26,7 +31,21 @@
     remeasure: true,
     heurAt: 0,
     heurEls: null,
-    method: null
+    method: null,
+    track: null,
+    findTimer: null,
+    findJob: 0,
+    finding: null,
+    findRetryAt: 0,
+    found: null,
+    panel: null,
+    promptTimer: null,
+    promptedFor: null,
+    noLyricsFor: null,
+    dismissedFor: null,
+    lastManualTranslateAt: 0,
+    lastManualFindAt: 0,
+    trackDebugAt: 0
   };
 
   const LINE_SELECTOR = [
@@ -104,6 +123,345 @@
     if (el) el.classList.remove('on');
   }
 
+  const PLAYER_BAR = [
+    '[data-testid="now-playing-bar"]',
+    '[data-testid="main-view-player-bar"]',
+    '[data-testid="bottom-bar"]'
+  ].join(',');
+
+  const LYRICS_PANE = [
+    '[data-testid="lyrics-container"]',
+    '[data-testid="lyrics-line-always-visible"]',
+    '[data-testid^="lyrics-line"]',
+    '[data-testid="fullscreen-lyric"]',
+    '[data-testid="lyrics-unavailable"]',
+    '[data-testid="lyrics-no-content"]',
+    '[data-testid="lyrics-empty"]'
+  ].join(',');
+
+  function parseClock(text) {
+    const parts = String(text || '').trim().split(':').map(Number);
+    if (!parts.length || parts.some((n) => !Number.isFinite(n))) return 0;
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    return 0;
+  }
+
+  function textOfLinks(el) {
+    if (!el) return '';
+    const links = el.matches('a') ? [el] : [...el.querySelectorAll('a')];
+    const list = links.length ? links.map((a) => norm(a.textContent)) : [norm(el.textContent)];
+    return list.filter(Boolean).join(', ');
+  }
+
+  function trackFromTextLeaves(container) {
+    const texts = [...container.querySelectorAll('*')]
+      .filter((el) => !el.children.length && !el.closest('.slt-tr') && !/^\d{1,2}:\d{2}$/.test(el.textContent))
+      .map((el) => norm(el.textContent))
+      .filter((t) => t && /\p{L}|\p{N}/u.test(t));
+    if (!texts.length) return null;
+    const title = texts[0];
+    const artist = [...new Set(texts.slice(1))].join(', ');
+    return title && artist ? { title, artist } : null;
+  }
+
+  function getTrackInfo() {
+    const npw = document.querySelector('[data-testid="now-playing-widget"]')
+      || document.querySelector('[data-testid*="now-playing-widget" i]');
+    const bar = document.querySelector(PLAYER_BAR)
+      || (npw && (npw.closest('footer') || npw.parentElement))
+      || document.querySelector('footer')
+      || npw;
+    if (!bar) {
+      if (Date.now() - state.trackDebugAt > 5000) {
+        state.trackDebugAt = Date.now();
+        console.debug('[SLT] track not detected — no player bar or now-playing widget found in DOM');
+      }
+      return null;
+    }
+
+    const titleWrap = bar.querySelector('[data-testid="context-item-info-title"]');
+    let titleEl = (titleWrap && titleWrap.querySelector('[data-testid="context-item-link"], a'))
+      || bar.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget-title"] a, [data-testid="nowplaying-track-link"], .track-info__name a')
+      || titleWrap;
+    let artistEl = bar.querySelector('[data-testid="context-item-info-subtitles"], [data-testid="context-item-info-artist"], [data-testid="nowplaying-artist"], [data-testid="now-playing-widget-artist"] a, .track-info__artists a');
+
+    if (!titleEl) titleEl = bar.querySelector('[data-testid*="title" i]');
+    if (!artistEl) artistEl = bar.querySelector('[data-testid*="artist" i], [data-testid*="subtitle" i]');
+
+    let title = titleEl ? norm(titleEl.textContent) : '';
+    let artist = textOfLinks(artistEl);
+
+    if (!title || !artist) {
+      const fromText = trackFromTextLeaves(npw || bar);
+      if (fromText) {
+        title = fromText.title;
+        artist = fromText.artist;
+      }
+    }
+
+    if (!title || !artist || /^advertisement$/i.test(title)) {
+      if (Date.now() - state.trackDebugAt > 5000) {
+        state.trackDebugAt = Date.now();
+        const widget = bar.querySelector('[data-testid="now-playing-widget"]') || bar;
+        console.debug('[SLT] track not detected — bar testid:', bar.getAttribute('data-testid'),
+          '| title:', JSON.stringify(title), '| artist:', JSON.stringify(artist),
+          '| widget HTML:', widget.outerHTML.slice(0, 600));
+      }
+      return null;
+    }
+
+    const href = (titleEl && (titleEl.getAttribute('href') || titleEl.href)) || '';
+    const trackHref = bar.querySelector('a[href*="/track/"]');
+    const idMatch = [href, trackHref ? trackHref.getAttribute('href') : '']
+      .map((h) => h.match(/\/track\/([A-Za-z0-9]+)/))
+      .find(Boolean);
+
+    const durationEl = bar.querySelector('[data-testid="playback-duration"], [data-testid="playback_duration"]');
+    const duration = durationEl ? Math.max(0, parseClock(durationEl.textContent)) : 0;
+
+    return {
+      id: idMatch ? idMatch[1] : '',
+      title,
+      artist,
+      duration,
+      key: idMatch ? 'trk:' + idMatch[1] : 'q:' + hash(artist + '\n' + title)
+    };
+  }
+
+  function lyricsPaneOpen() {
+    if (document.querySelector(LYRICS_PANE)) return true;
+    return !!document.querySelector('[data-testid^="lyrics"]:not([data-testid^="lyrics-line"])');
+  }
+
+  function syncTrack() {
+    const track = getTrackInfo();
+    if (!track) return;
+    if (state.track && state.track.key === track.key) {
+      state.track = track;
+      return;
+    }
+
+    if (state.panel) {
+      state.panel.remove();
+      state.panel = null;
+      resetState();
+    }
+
+    state.track = track;
+    state.found = null;
+    state.promptedFor = null;
+    state.noLyricsFor = null;
+    state.dismissedFor = null;
+    state.finding = null;
+    state.findRetryAt = 0;
+    state.findJob++;
+    cancelFind();
+    hidePrompt();
+  }
+
+  function lyricLines(lyrics) {
+    if (!lyrics) return [];
+    let text = String(lyrics.synced || '');
+    if (text.trim()) {
+      text = text.split('\n')
+        .map((line) => line
+          .replace(/^\s*(?:\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*)+/, '')
+          .replace(/<\d{1,3}:\d{2}(?:[.:]\d{1,3})?>/g, '')
+          .replace(/^\s*\[(?:ar|al|ti|by|offset|re|ve|length):[^\]]*\]\s*$/i, '')
+          .trim())
+        .filter(Boolean)
+        .join('\n');
+    }
+    if (!text.trim()) text = String(lyrics.plain || '');
+    return text.split('\n').map(norm).filter((l) => l && hasLetters(l)).slice(0, 800);
+  }
+
+  function promptEl() {
+    let el = document.getElementById('slt-prompt');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'slt-prompt';
+      el.setAttribute('role', 'dialog');
+      el.innerHTML = '<span class="slt-prompt-text">Found lyrics, show?</span>'
+        + '<span class="slt-prompt-actions">'
+        + '<button type="button" class="slt-prompt-show">Show</button>'
+        + '<button type="button" class="slt-prompt-hide">Not now</button>'
+        + '</span>';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function showPrompt(trackKey) {
+    if (!state.found || state.found.trackKey !== trackKey) return;
+    const el = promptEl();
+    el.querySelector('.slt-prompt-show').onclick = () => showFound(trackKey);
+    el.querySelector('.slt-prompt-hide').onclick = () => {
+      state.dismissedFor = trackKey;
+      hidePrompt();
+    };
+    el.classList.add('on');
+    clearTimeout(state.promptTimer);
+    state.promptTimer = setTimeout(() => {
+      state.dismissedFor = trackKey;
+      hidePrompt();
+    }, 15000);
+  }
+
+  function hidePrompt() {
+    clearTimeout(state.promptTimer);
+    const el = document.getElementById('slt-prompt');
+    if (el) el.classList.remove('on');
+  }
+
+  function showFound(trackKey) {
+    if (!state.found || state.found.trackKey !== trackKey || state.panel) return;
+    if (!state.track || state.track.key !== trackKey) return;
+    const lines = lyricLines(state.found.lyrics);
+    hidePrompt();
+    if (!lines.length) {
+      state.noLyricsFor = trackKey;
+      toast(state.found.lyrics.instrumental ? 'This track is instrumental' : 'No lyrics found on LRCLIB', { err: true });
+      return;
+    }
+
+    const el = document.createElement('div');
+    el.id = 'slt-lrc';
+    el.innerHTML = '<div class="slt-lrc-head">'
+      + '<span class="slt-lrc-heading"><span class="slt-lrc-title">Lyrics</span><span class="slt-lrc-src">LRCLIB</span></span>'
+      + '<button type="button" class="slt-lrc-close" aria-label="Close lyrics" title="Close">×</button>'
+      + '</div><div class="slt-lrc-body"></div>';
+
+    el.querySelector('.slt-lrc-close').addEventListener('click', () => closePanel());
+    const body = el.querySelector('.slt-lrc-body');
+    for (const text of lines) {
+      const line = document.createElement('div');
+      line.className = 'slt-lrc-line';
+      line.textContent = text;
+      body.appendChild(line);
+    }
+
+    document.body.appendChild(el);
+    state.panel = el;
+    state.dismissedFor = null;
+    scan();
+  }
+
+  function closePanel() {
+    const el = state.panel;
+    state.panel = null;
+    if (el) el.remove();
+    state.dismissedFor = state.found ? state.found.trackKey : (state.track ? state.track.key : null);
+    state.found = null;
+    resetState();
+    scan();
+  }
+
+  function cancelFind() {
+    clearTimeout(state.findTimer);
+    state.findTimer = null;
+  }
+
+  function scheduleFind() {
+    if (!settings.findLyrics || state.panel || !state.track) return;
+    if (!lyricsPaneOpen()) return;
+    if (state.findTimer) return;
+    if (Date.now() < state.findRetryAt) return;
+
+    const key = state.track.key;
+    if (state.finding === key) return;
+    if (state.noLyricsFor === key || state.dismissedFor === key || state.promptedFor === key) return;
+    state.findTimer = setTimeout(() => runFind(false), 2200);
+  }
+
+  async function runFind(force) {
+    cancelFind();
+    const track = state.track;
+    if (!track || state.panel) return;
+
+    if (!force) {
+      if (!settings.findLyrics || !lyricsPaneOpen()) return;
+      if (state.finding === track.key) return;
+      if (state.noLyricsFor === track.key || state.dismissedFor === track.key || state.promptedFor === track.key) return;
+    }
+
+    const job = ++state.findJob;
+    state.finding = track.key;
+    toast('Searching LRCLIB…', { sticky: true });
+
+    const res = await send({
+      type: 'find-lyrics',
+      key: track.key,
+      track: track.title,
+      artist: track.artist,
+      duration: track.duration,
+      refresh: !!force
+    });
+    if (job !== state.findJob || !state.track || state.track.key !== track.key) {
+      hideToast();
+      return;
+    }
+    state.finding = null;
+    state.findRetryAt = 0;
+    hideToast();
+    if (!force && (!settings.findLyrics || findLines() || !lyricsPaneOpen())) return;
+
+    if (!res || !res.ok) {
+      toast((res && res.error) || 'Could not reach LRCLIB', { err: true });
+      if (!force) state.findRetryAt = Date.now() + 60000;
+      return;
+    }
+    const hasText = !!(res.lyrics && ((res.lyrics.synced || '').trim() || (res.lyrics.plain || '').trim()));
+    if (!res.found || !hasText) {
+      state.noLyricsFor = track.key;
+      state.promptedFor = track.key;
+      const msg = res.instrumental || (res.lyrics && res.lyrics.instrumental) ? 'This track is instrumental' : 'No lyrics found on LRCLIB';
+      toast(msg, { err: !!force });
+      return;
+    }
+
+    state.found = { trackKey: track.key, lyrics: res.lyrics };
+    state.promptedFor = track.key;
+    if (settings.autoShowFound) showFound(track.key);
+    else showPrompt(track.key);
+  }
+
+  function manualFind() {
+    const track = getTrackInfo();
+    if (!track) {
+      toast('Play a song on Spotify first', { err: true });
+      return;
+    }
+    if (state.panel && state.track && state.track.key === track.key) {
+      toast('Lyrics are already shown');
+      return;
+    }
+    if (state.finding) {
+      toast('Already searching LRCLIB…', { sticky: true });
+      return;
+    }
+    const now = Date.now();
+    if (now - state.lastManualFindAt < 3000) {
+      toast('Wait a few seconds between searches');
+      return;
+    }
+    state.lastManualFindAt = now;
+    if (state.panel) {
+      state.panel.remove();
+      state.panel = null;
+      resetState();
+    }
+    state.track = track;
+    state.found = null;
+    state.promptedFor = null;
+    state.noLyricsFor = null;
+    state.dismissedFor = null;
+    hidePrompt();
+    state.findJob++;
+    runFind(true);
+  }
+
   function bySelector() {
     const all = [...document.querySelectorAll(LINE_SELECTOR)].filter((e) => !e.closest('.slt-tr'));
     const set = new Set(all);
@@ -153,6 +511,15 @@
   }
 
   function findLines() {
+    const mine = [...document.querySelectorAll('#slt-lrc .slt-lrc-line')];
+    if (mine.length) {
+      if (state.method !== 'panel') {
+        state.method = 'panel';
+        console.debug(`[SLT] lyrics found via panel (${mine.length} lines)`);
+      }
+      return mine;
+    }
+
     let els = bySelector();
     let method = 'selector';
     if (els.length < 2) {
@@ -228,16 +595,29 @@
     state.map = null;
     state.job++;
     clearTimeout(state.startTimer);
+    clearTimeout(state.waitTimer);
+    state.waitTimer = null;
+    state.pending = null;
     removeAll();
     hideToast();
   }
 
   function scan() {
+    syncTrack();
+
     const els = findLines();
     if (!els) {
       if (state.key !== null) resetState();
+      scheduleFind();
       return null;
     }
+
+    cancelFind();
+    if (!state.panel && state.found && (!state.track || state.found.trackKey !== state.track.key)) {
+      state.found = null;
+      hidePrompt();
+    }
+
     const texts = els.map(getText);
     const key = hash(settings.target + '\n' + texts.join('\n'));
 
@@ -273,16 +653,22 @@
     }
 
     const job = ++state.job;
-    const waiting = setTimeout(() => toast('Translating lyrics…', { sticky: true }), 350);
+    state.pending = job;
+    clearTimeout(state.waitTimer);
+    state.waitTimer = setTimeout(() => toast('Translating lyrics…', { sticky: true }), 350);
 
     const res = await send({
       type: 'translate',
       key,
       target: settings.target,
       lines: unique,
-      cacheOnly: !(manual || settings.auto)
+      cacheOnly: !(manual || settings.auto),
+      fallback: settings.fallbackTranslators !== false,
+      requestId: job
     });
-    clearTimeout(waiting);
+    if (state.pending === job) state.pending = null;
+    clearTimeout(state.waitTimer);
+    state.waitTimer = null;
     if (job !== state.job || key !== state.key) return;
 
     if (!res || !res.ok) {
@@ -301,11 +687,23 @@
     if (cur) applyAll(cur, cur.map(getText));
 
     if (Object.keys(res.map).length === 0) toast(`Lyrics are already in ${langName(settings.target)}`);
-    else if (manual || !res.cached) toast(res.cached ? 'Translation loaded from cache' : `Translated to ${langName(settings.target)}`);
-    else hideToast();
+    else if (manual || !res.cached) {
+      const via = res.providerLabel ? ` via ${res.providerLabel}` : '';
+      toast(res.cached ? `Loaded from cache${via}` : `Translated to ${langName(settings.target)}${via}`);
+    } else hideToast();
   }
 
   function manualTranslate() {
+    if (state.pending) {
+      toast('Already translating…', { sticky: true });
+      return;
+    }
+    const now = Date.now();
+    if (now - state.lastManualTranslateAt < 2000) {
+      toast('Wait a couple of seconds between retries');
+      return;
+    }
+    state.lastManualTranslateAt = now;
     const r = scan();
     if (!r) {
       toast('Open the lyrics view on Spotify first', { err: true });
@@ -332,6 +730,15 @@
   chrome.runtime.onMessage.addListener((m, _s, reply) => {
     if (m && m.type === 'translate-now') manualTranslate();
     else if (m && m.type === 'reset') resetCurrent();
+    else if (m && m.type === 'find-lyrics-now') manualFind();
+    else if (m && m.type === 'translate-status') {
+      if (m.requestId != null ? m.requestId !== state.pending : (m.key && m.key !== state.key)) {
+        return reply({ ok: true });
+      }
+      clearTimeout(state.waitTimer);
+      state.waitTimer = null;
+      if (m.text) toast(String(m.text), { sticky: true });
+    }
     reply({ ok: true });
   });
 
@@ -341,7 +748,15 @@
     settings = { ...DEFAULTS, ...(changes.settings.newValue || {}) };
     applyVars();
     if (prev.onlyTranslated !== settings.onlyTranslated) state.remeasure = true;
+    if (prev.findLyrics && !settings.findLyrics) cancelFind();
+    if (!prev.findLyrics && settings.findLyrics) {
+      state.noLyricsFor = null;
+      state.dismissedFor = null;
+    }
     if (!prev.auto && settings.auto && state.key && !state.map) start(state.key);
+    if (!prev.autoShowFound && settings.autoShowFound && state.found && !state.panel) {
+      showFound(state.found.trackKey);
+    }
     scan();
   });
 
@@ -353,6 +768,9 @@
     if (e.code === 'KeyT') {
       e.preventDefault();
       manualTranslate();
+    } else if (e.code === 'KeyL') {
+      e.preventDefault();
+      manualFind();
     } else if (e.code === 'KeyH') {
       e.preventDefault();
       settings.onlyTranslated = !settings.onlyTranslated;
@@ -369,11 +787,16 @@
   function isOwn(m) {
     const n = m.target;
     const el = n.nodeType === 1 ? n : n.parentElement;
-    if (el && el.closest && el.closest('.slt-tr, #slt-toast')) return true;
+    if (el && el.closest && el.closest('.slt-tr, #slt-toast, #slt-prompt, #slt-lrc')) return true;
     if (m.type !== 'childList') return false;
     const nodes = [...m.addedNodes, ...m.removedNodes];
     if (nodes.length === 0) return true;
-    return nodes.every((x) => x.nodeType === 1 && ((x.classList && x.classList.contains('slt-tr')) || x.id === 'slt-toast'));
+    return nodes.every((x) => x.nodeType === 1 && (
+      (x.classList && x.classList.contains('slt-tr'))
+      || x.id === 'slt-toast'
+      || x.id === 'slt-prompt'
+      || x.id === 'slt-lrc'
+    ));
   }
 
   function restoreNow() {
@@ -387,6 +810,7 @@
 }
 
   function init() {
+    console.info(`[SLT] v${chrome.runtime.getManifest().version} content script active`);
     applyVars();
     new MutationObserver((muts) => {
       if (muts.every(isOwn)) return;
