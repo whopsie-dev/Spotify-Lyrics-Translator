@@ -103,4 +103,3 @@ async function action(type) {
 
   chrome.storage.onChanged.addListener((c) => { if (c.cacheIndex || c.lyricsIndex) refreshCount(); });
 })();
-

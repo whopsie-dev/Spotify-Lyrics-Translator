@@ -83,10 +83,6 @@ function ignoreRejection(result) {
   } catch {}
 }
 
-// chrome.action.enable/disable(tabId) rejects when the tab disappeared between
-// the tab event and this call ("No tab with id"), which Chrome reports as an
-// uncaught error in the service worker. A missing tab means there is nothing
-// left to do, so the rejection is expected and ignored.
 function setActionEnabled(tabId, enabled) {
   try {
     ignoreRejection(enabled ? chrome.action.enable(tabId) : chrome.action.disable(tabId));
@@ -205,9 +201,6 @@ function lyricLinesOf(rec) {
   return raw.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-// LRCLIB also holds placeholder/spam records with the right title and artist
-// but no actual lyrics (a single "probe" line, for example). Those would
-// otherwise win a lookup and show up instead of the real text.
 function hasUsableLyrics(rec) {
   const lines = lyricLinesOf(rec);
   if (lines.length >= 2) return true;
@@ -355,9 +348,6 @@ async function lrclibLookup(meta, { qFallback = true } = {}) {
   return null;
 }
 
-// YouTube titles are messy, so the content script sends several title/artist
-// guesses. Try them in order, then fall back to a free-text search of the
-// (cleaned) video title.
 async function lrclibSearchQuery(q, metas) {
   const text = String(q || '').trim();
   if (!text) return null;
@@ -390,8 +380,6 @@ function findCandidates(msg) {
       if (cand) push(cand.track, cand.artist);
     }
   }
-  // Only fall back to the raw metadata when the content script had no parsed
-  // candidates (Spotify), otherwise it just repeats a worse query.
   if (!out.length) push(msg.track, msg.artist);
   return out.slice(0, MAX_FIND_CANDIDATES);
 }
@@ -426,9 +414,6 @@ async function handleFindLyrics(msg) {
     let found = null;
     for (let i = 0; i < candidates.length && !found; i++) {
       const meta = { ...candidates[i], album: i === 0 ? album : '' };
-      // When the content script sent a title to search for, that free-text pass
-      // below is the same query for every candidate, so skip the per-candidate
-      // fallback and spend the request once.
       found = await lrclibLookup(meta, { qFallback: !query && i === candidates.length - 1 });
     }
     if (!found && query) found = await lrclibSearchQuery(query, candidates);

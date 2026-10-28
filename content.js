@@ -165,12 +165,6 @@
     return title && artist ? { title, artist } : null;
   }
 
-  // ---- YouTube -------------------------------------------------------------
-  // YouTube has no lyric DOM to annotate, so "find lyrics" works from video
-  // metadata instead: the description's music shelf (exact song/artist) when
-  // YouTube exposes one, otherwise the title ("Artist - Song") plus the channel.
-
-  // Bracketed parts of a YouTube title that are upload noise, not song info.
   const YT_NOISE = new RegExp([
     '^(?:official\\s+)?(?:(?:hd|hq|4k|8k)\\s+)?(?:music\\s+)?(?:video|audio)$',
     '^(?:official\\s+)?(?:lyrics?|lyric\\s+video|lyric\\s+visuali[sz]er)$',
@@ -244,8 +238,6 @@
     return el ? Math.round(parseClock(el.textContent)) : 0;
   }
 
-  // The description's "Music" shelf renders the official song title, artist
-  // and album as a yt-video-attribute-view-model (no stable testids).
   function youtubeMusicShelf() {
     const view = document.querySelector('ytd-watch-metadata ytd-horizontal-card-list-renderer yt-video-attribute-view-model')
       || document.querySelector('#description yt-video-attribute-view-model');
@@ -277,7 +269,6 @@
       .filter((w) => w.length > 2));
   }
 
-  // Do two loose names ("Katy Perry" / "KatyPerryVEVO") refer to one act?
   function entityMatch(a, b) {
     const wa = wordSet(a);
     const wb = wordSet(b);
@@ -358,8 +349,6 @@
         const featless = stripFeat(track);
         if (featless && featless !== track) add(featless, artist);
       } else {
-        // Uploads overwhelmingly use "Artist - Song"; keep the reverse order
-        // as a fallback for "Song - Artist" titles.
         add(rest, first);
         add(first, rest);
       }
@@ -474,8 +463,6 @@
     };
   }
 
-  // A hidden/offscreen leftover (or an unrelated control like the playbar's
-  // lyrics button) must not count as an open lyrics view.
   function isShown(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 40 || r.height < 40) return false;
@@ -485,8 +472,6 @@
   }
 
   function lyricsPaneOpen() {
-    // YouTube never renders a lyrics pane — a music video is the equivalent of
-    // "the user is on a track that can have lyrics".
     if (site() === 'youtube') return !!youtubeVideoId() && youtubeIsMusic();
     const candidates = document.querySelectorAll(
       LYRICS_PANE + ', [data-testid^="lyrics"]:not([data-testid^="lyrics-line"])'
@@ -498,8 +483,6 @@
     return false;
   }
 
-  // Spotify is showing lyrics (even a single line, e.g. the sidebar's
-  // always-visible mode) — never search LRCLIB in that case.
   function nativeLyricsVisible() {
     return site() !== 'youtube' && !!document.querySelector(LINE_SELECTOR);
   }
@@ -801,9 +784,6 @@
       return mine;
     }
 
-    // On YouTube only the extension's own panel counts as lyrics — the page
-    // itself has no lyric lines, and guessing from page text would annotate
-    // descriptions or comments.
     if (site() === 'youtube') {
       state.method = null;
       return null;
