@@ -229,9 +229,31 @@
     };
   }
 
+  // A hidden/offscreen leftover (or an unrelated control like the playbar's
+  // lyrics button) must not count as an open lyrics view.
+  function isShown(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 40 || r.height < 40) return false;
+    if (r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight) return false;
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity) > 0.05;
+  }
+
   function lyricsPaneOpen() {
-    if (document.querySelector(LYRICS_PANE)) return true;
-    return !!document.querySelector('[data-testid^="lyrics"]:not([data-testid^="lyrics-line"])');
+    const candidates = document.querySelectorAll(
+      LYRICS_PANE + ', [data-testid^="lyrics"]:not([data-testid^="lyrics-line"])'
+    );
+    for (const el of candidates) {
+      if (el.closest('button, [role="button"], a')) continue;
+      if (isShown(el)) return true;
+    }
+    return false;
+  }
+
+  // Spotify is showing lyrics (even a single line, e.g. the sidebar's
+  // always-visible mode) — never search LRCLIB in that case.
+  function spotifyLyricsVisible() {
+    return !!document.querySelector(LINE_SELECTOR);
   }
 
   function syncTrack() {
@@ -366,13 +388,14 @@
   function scheduleFind() {
     if (!settings.findLyrics || state.panel || !state.track) return;
     if (!lyricsPaneOpen()) return;
+    if (spotifyLyricsVisible()) return;
     if (state.findTimer) return;
     if (Date.now() < state.findRetryAt) return;
 
     const key = state.track.key;
     if (state.finding === key) return;
     if (state.noLyricsFor === key || state.dismissedFor === key || state.promptedFor === key) return;
-    state.findTimer = setTimeout(() => runFind(false), 2200);
+    state.findTimer = setTimeout(() => runFind(false), 3000);
   }
 
   async function runFind(force) {
@@ -382,8 +405,10 @@
 
     if (!force) {
       if (!settings.findLyrics || !lyricsPaneOpen()) return;
+      if (findLines() || spotifyLyricsVisible()) return;
       if (state.finding === track.key) return;
       if (state.noLyricsFor === track.key || state.dismissedFor === track.key || state.promptedFor === track.key) return;
+      console.debug('[SLT] auto-find: lyrics view open with no lines rendered — searching LRCLIB');
     }
 
     const job = ++state.findJob;
@@ -405,7 +430,7 @@
     state.finding = null;
     state.findRetryAt = 0;
     hideToast();
-    if (!force && (!settings.findLyrics || findLines() || !lyricsPaneOpen())) return;
+    if (!force && (!settings.findLyrics || findLines() || spotifyLyricsVisible() || !lyricsPaneOpen())) return;
 
     if (!res || !res.ok) {
       toast((res && res.error) || 'Could not reach LRCLIB', { err: true });
