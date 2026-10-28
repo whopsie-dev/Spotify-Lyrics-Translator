@@ -6,7 +6,7 @@ const SPOTIFY = /^https:\/\/open\.spotify\.com\//;
 const YOUTUBE = /^https:\/\/www\.youtube\.com\//;
 const LRCLIB = 'https://lrclib.net';
 const MANIFEST_VERSION = (() => {
-  try { return chrome.runtime.getManifest().version; } catch { return '1.4.0'; }
+  try { return chrome.runtime.getManifest().version; } catch { return '1.4.1'; }
 })();
 const LRCLIB_HEADERS = {
   'Lrclib-Client': `Spotify Lyrics Translator v${MANIFEST_VERSION} (https://github.com/whopsie-dev/Spotify-Lyrics-Translator)`,
@@ -77,16 +77,34 @@ function attemptSummary(attempts) {
     .join('; ');
 }
 
+function ignoreRejection(result) {
+  try {
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch {}
+}
+
+// chrome.action.enable/disable(tabId) rejects when the tab disappeared between
+// the tab event and this call ("No tab with id"), which Chrome reports as an
+// uncaught error in the service worker. A missing tab means there is nothing
+// left to do, so the rejection is expected and ignored.
+function setActionEnabled(tabId, enabled) {
+  try {
+    ignoreRejection(enabled ? chrome.action.enable(tabId) : chrome.action.disable(tabId));
+  } catch {}
+}
+
 function syncAction(tabId, url) {
-  if (url && (SPOTIFY.test(url) || YOUTUBE.test(url))) chrome.action.enable(tabId);
-  else chrome.action.disable(tabId);
+  setActionEnabled(tabId, !!(url && (SPOTIFY.test(url) || YOUTUBE.test(url))));
 }
 
 function initAction() {
-  chrome.action.disable();
+  try { ignoreRejection(chrome.action.disable()); } catch {}
   chrome.tabs.query(
     { url: ['https://open.spotify.com/*', 'https://www.youtube.com/*'] },
-    (tabs) => tabs.forEach((t) => chrome.action.enable(t.id))
+    (tabs) => {
+      if (chrome.runtime.lastError) return;
+      tabs.forEach((t) => setActionEnabled(t.id, true));
+    }
   );
 }
 
@@ -95,9 +113,12 @@ chrome.runtime.onStartup.addListener(initAction);
 chrome.tabs.onUpdated.addListener((id, info, tab) => {
   if (info.url || info.status) syncAction(id, tab.url);
 });
-chrome.tabs.onActivated.addListener(({ tabId }) =>
-  chrome.tabs.get(tabId, (t) => t && syncAction(tabId, t.url))
-);
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    syncAction(tabId, tab.url);
+  });
+});
 
 let writeChain = Promise.resolve();
 
@@ -667,21 +688,27 @@ async function doTranslate({ key, target, lines, cacheOnly, fallback }, onStatus
   return { ok: true, map: finalMap, cached: false, provider, providerLabel };
 }
 
+function reply(sendResponse, payload) {
+  try {
+    sendResponse(payload);
+  } catch {}
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === 'translate') {
         const tabId = sender && sender.tab && sender.tab.id;
-        sendResponse(await handleTranslate(msg, (text) =>
+        reply(sendResponse, await handleTranslate(msg, (text) =>
           sendTranslateStatus(tabId, msg.key, text, msg.requestId)));
-      } else if (msg.type === 'find-lyrics') sendResponse(await handleFindLyrics(msg));
+      } else if (msg.type === 'find-lyrics') reply(sendResponse, await handleFindLyrics(msg));
       else if (msg.type === 'clear') {
         await clearCached(msg.key);
-        sendResponse({ ok: true });
+        reply(sendResponse, { ok: true });
       }
     } catch (e) {
-      sendResponse({ ok: false, error: String((e && e.message) || e), attempts: (e && e.attempts) || null });
+      reply(sendResponse, { ok: false, error: String((e && e.message) || e), attempts: (e && e.attempts) || null });
     }
-  })();
+  })().catch(() => {});
   return true;
 });

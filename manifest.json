@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spotify Lyrics Translator",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Shows translated lyrics under the original lines on the Spotify web player, and finds and translates lyrics for YouTube videos. Translations are cached locally.",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
