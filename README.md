@@ -1,6 +1,6 @@
 # Spotify Lyrics Translator
 
-A Chrome extension that shows translated lyrics under the original lines on the [Spotify Web Player](https://open.spotify.com). Translations are saved locally (so the same song never gets translated twice)
+A Chrome extension that shows translated lyrics under the original lines on the [Spotify Web Player](https://open.spotify.com), and finds + translates lyrics for YouTube music videos. Translations are saved locally (so the same song never gets translated twice)
 
 ![Chrome Web Store](https://img.shields.io/badge/platform-Chrome-blue?logo=googlechrome&logoColor=white)
 ![Manifest V3](https://img.shields.io/badge/manifest-v3-green)
@@ -13,6 +13,7 @@ A Chrome extension that shows translated lyrics under the original lines on the 
 - **Inline translations** — translated text shows up right under each lyric line
 - **Auto-translate** — lyrics are translated as they appear (can be turned off)
 - **Missing lyrics fallback** — if Spotify has no lyrics for a track, the extension looks them up on [LRCLIB](https://lrclib.net) (free, no API key) and offers to show them
+- **YouTube support** — music videos get lyrics from LRCLIB too: the video title, channel and description's music info are matched against LRCLIB, and the found lyrics are translated in a panel next to the video
 - **Translation fallbacks** — if Google Translate rate-limits you, Mozhi and Lingva keep things working (optional)
 - **37 languages** — English, Spanish, French, German, Japanese, Korean, Chinese, and more
 - **Local cache** — translations and found lyrics are stored in your browser, no account or server needed
@@ -28,7 +29,7 @@ A Chrome extension that shows translated lyrics under the original lines on the 
 2. Open `chrome://extensions` in Chrome (or any Chromium-based browser)
 3. Turn on **Developer mode** (toggle in the top-right)
 4. Click **Load unpacked** and select the project folder
-5. Open [open.spotify.com](https://open.spotify.com) and play a song with lyrics
+5. Open [open.spotify.com](https://open.spotify.com) and play a song with lyrics, or open a YouTube video
 
 ### From the Chrome Web Store
 
@@ -41,13 +42,20 @@ A Chrome extension that shows translated lyrics under the original lines on the 
 3. If Spotify has no lyrics for the track, open the lyrics view and the extension will look them up on LRCLIB
 4. Click the extension icon in the toolbar to open the settings popup
 
+### YouTube
+
+1. Open a music video on YouTube and let it start
+2. The extension recognises music videos (Music category, "Artist - Topic"/VEVO channels, or YouTube's own music info in the description) and looks the song up on LRCLIB
+3. If lyrics are found, press **Show** in the prompt (or turn on **Auto show found lyrics**) — the lyrics appear in a panel on the right and are translated line by line
+4. For other videos, press `Alt+L`, use **Find lyrics now** in the popup, or the `Alt+L` shortcut after opening the video
+
 ### Settings
 
 | Setting | Description |
 |---|---|
 | **Translate to** | Target language for translations |
 | **Translate automatically** | Translate lyrics as soon as they appear |
-| **Find missing lyrics** | Search LRCLIB when Spotify has no lyrics for the current track (on by default) |
+| **Find lyrics (LRCLIB)** | Look up lyrics on LRCLIB when Spotify has none for the current track, and automatically for YouTube music videos (on by default) |
 | **Auto show found lyrics** | Show LRCLIB lyrics right away instead of asking first (off by default) |
 | **Fallback translation services** | Use Mozhi and Lingva when Google Translate is rate-limited (on by default) |
 | **Font size** | Size of the translated text compared to the original |
@@ -61,7 +69,7 @@ A Chrome extension that shows translated lyrics under the original lines on the 
 | Shortcut | Action |
 |---|---|
 | `Alt+T` | Translate current lyrics |
-| `Alt+L` | Find lyrics for the current track on LRCLIB |
+| `Alt+L` | Find lyrics for the current track/video on LRCLIB |
 | `Alt+H` | Toggle between original + translated and translated only |
 | `Alt+R` | Reset translation for the current song |
 
@@ -74,6 +82,8 @@ If Google Translate responds with a rate-limit error (HTTP 429), the extension p
 All network requests have a cooldown, one request at a time per service, with a minimum gap between requests (about a second for LRCLIB, ~350-400 ms for translators) — and repeated presses of the manual shortcuts are merged into a single request, so the extension never spams a service (to avoid ip-bans, this still requires testing though).
 
 If the lyrics view is open but Spotify has no lyrics for the current track, the extension looks the track up on [LRCLIB](https://lrclib.net) using its title, artist, and duration. Found lyrics show up in a panel on the right and get translated like native lyrics. Both found lyrics and "not found" results are cached locally, so each track is only looked up once. You can also trigger a lookup manually with `Alt+L` or the **Find lyrics now** button in the popup.
+
+On YouTube there is no lyric DOM to annotate, so lookups are built from video metadata instead: the "Song / Artist / Album" info YouTube shows in a music video's description when available, and otherwise the video title (`Artist - Song`, or the reversed order) together with the channel name. Titles are cleaned of upload noise (`Official Video`, `Lyrics`, `4K Remaster`, …), Topic/VEVO channels are recognised, and the video's duration is used to pick the right LRCLIB record. Several title/artist guesses are tried, best match first, and placeholder LRCLIB entries without real lyrics are skipped. Found lyrics are shown in the same panel and translated line by line; the lookup is cached per video id.
 
 ## Project Structure
 
@@ -95,7 +105,7 @@ spotify-lyrics-translator/
 
 ## Privacy
 
-No data is collected. Lyric text is sent to Google Translate for translation. If fallback translators are enabled and Google is rate-limited, lyric text is also sent to Mozhi or Lingva. Track metadata (title, artist, duration) is sent to LRCLIB to look up missing lyrics. Nothing else leaves your browser. See [PRIVACY.md](PRIVACY.md) for full details.
+No data is collected. Lyric text is sent to Google Translate for translation. If fallback translators are enabled and Google is rate-limited, lyric text is also sent to Mozhi or Lingva. Track or video metadata (title, artist, duration) is sent to LRCLIB to look up lyrics. Nothing else leaves your browser. See [PRIVACY.md](PRIVACY.md) for full details.
 
 ## Contributing
 

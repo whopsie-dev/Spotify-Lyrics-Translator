@@ -7,7 +7,7 @@ Thanks for your interest in contributing!
 1. Fork this repository
 2. Clone your fork locally
 3. Load the extension in Chrome (`chrome://extensions` → **Load unpacked** → select the project folder)
-4. Make your changes and test on [open.spotify.com](https://open.spotify.com)
+4. Make your changes and test on [open.spotify.com](https://open.spotify.com) (and on YouTube for the lyrics lookup)
 
 ## Reporting Bugs
 
@@ -21,5 +21,5 @@ You can also message **@xocn** on Discord, or join the Discord server at [https:
 ## Pull Requests
 
 - Keep changes focused — one feature or fix per PR
-- Test on Spotify before submitting
+- Test on Spotify and YouTube before submitting
 - Follow the existing code style

@@ -1,11 +1,16 @@
 const MAX_SONGS = 1500;
 const MAX_LYRICS = 800;
 const MAX_CHARS = 4000;
+const MAX_FIND_CANDIDATES = 3;
 const SPOTIFY = /^https:\/\/open\.spotify\.com\//;
+const YOUTUBE = /^https:\/\/www\.youtube\.com\//;
 const LRCLIB = 'https://lrclib.net';
+const MANIFEST_VERSION = (() => {
+  try { return chrome.runtime.getManifest().version; } catch { return '1.4.0'; }
+})();
 const LRCLIB_HEADERS = {
-  'Lrclib-Client': 'Spotify Lyrics Translator v1.3.0 (https://github.com/whopsie-dev/Spotify-Lyrics-Translator)',
-  'X-User-Agent': 'Spotify Lyrics Translator v1.3.0 (https://github.com/whopsie-dev/Spotify-Lyrics-Translator)'
+  'Lrclib-Client': `Spotify Lyrics Translator v${MANIFEST_VERSION} (https://github.com/whopsie-dev/Spotify-Lyrics-Translator)`,
+  'X-User-Agent': `Spotify Lyrics Translator v${MANIFEST_VERSION} (https://github.com/whopsie-dev/Spotify-Lyrics-Translator)`
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -73,14 +78,15 @@ function attemptSummary(attempts) {
 }
 
 function syncAction(tabId, url) {
-  if (url && SPOTIFY.test(url)) chrome.action.enable(tabId);
+  if (url && (SPOTIFY.test(url) || YOUTUBE.test(url))) chrome.action.enable(tabId);
   else chrome.action.disable(tabId);
 }
 
 function initAction() {
   chrome.action.disable();
-  chrome.tabs.query({ url: 'https://open.spotify.com/*' }, (tabs) =>
-    tabs.forEach((t) => chrome.action.enable(t.id))
+  chrome.tabs.query(
+    { url: ['https://open.spotify.com/*', 'https://www.youtube.com/*'] },
+    (tabs) => tabs.forEach((t) => chrome.action.enable(t.id))
   );
 }
 
@@ -167,6 +173,26 @@ function hasLyrics(rec) {
   return !!(rec && ((rec.plainLyrics && rec.plainLyrics.trim()) || (rec.syncedLyrics && rec.syncedLyrics.trim())));
 }
 
+function lyricLinesOf(rec) {
+  const plain = String((rec && rec.plainLyrics) || '');
+  const synced = String((rec && rec.syncedLyrics) || '');
+  const raw = plain.trim()
+    ? plain
+    : synced
+      .replace(/<\d{1,3}:\d{2}(?:[.:]\d{1,3})?>/g, ' ')
+      .replace(/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/g, ' ');
+  return raw.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+// LRCLIB also holds placeholder/spam records with the right title and artist
+// but no actual lyrics (a single "probe" line, for example). Those would
+// otherwise win a lookup and show up instead of the real text.
+function hasUsableLyrics(rec) {
+  const lines = lyricLinesOf(rec);
+  if (lines.length >= 2) return true;
+  return lines.join(' ').length >= 200;
+}
+
 function lyricsEntry(rec) {
   return {
     found: true,
@@ -190,6 +216,7 @@ function pickBest(list, meta) {
 
   for (const rec of list) {
     if (!rec || (!hasLyrics(rec) && !rec.instrumental)) continue;
+    if (!rec.instrumental && !hasUsableLyrics(rec)) continue;
 
     const track = NORM(rec.trackName);
     const artist = NORM(rec.artistName);
@@ -277,7 +304,7 @@ function lrclibFetch(path, params) {
   return paced('lrclib', () => lrclibRequest(path, params));
 }
 
-async function lrclibLookup(meta) {
+async function lrclibLookup(meta, { qFallback = true } = {}) {
   const getParams = new URLSearchParams({
     track_name: meta.track,
     artist_name: meta.artist
@@ -286,22 +313,66 @@ async function lrclibLookup(meta) {
   if (meta.duration) getParams.set('duration', String(meta.duration));
 
   const exact = await lrclibFetch('/api/get', getParams);
-  if (hasLyrics(exact) || (exact && exact.instrumental)) return lyricsEntry(exact);
+  if (exact && exact.instrumental) return lyricsEntry(exact);
+  if (hasLyrics(exact) && hasUsableLyrics(exact)) return lyricsEntry(exact);
 
   let results = await lrclibFetch('/api/search', new URLSearchParams({
     track_name: meta.track,
     artist_name: meta.artist
   }));
   let best = pickBest(results, meta);
+  if (best) return lyricsEntry(best);
 
-  if (!best) {
+  if (qFallback) {
     results = await lrclibFetch('/api/search', new URLSearchParams({
       q: `${meta.track} ${meta.artist}`.trim()
     }));
     best = pickBest(results, meta);
+    if (best) return lyricsEntry(best);
   }
 
-  return best ? lyricsEntry(best) : null;
+  return null;
+}
+
+// YouTube titles are messy, so the content script sends several title/artist
+// guesses. Try them in order, then fall back to a free-text search of the
+// (cleaned) video title.
+async function lrclibSearchQuery(q, metas) {
+  const text = String(q || '').trim();
+  if (!text) return null;
+  const results = await lrclibFetch('/api/search', new URLSearchParams({ q: text }));
+  if (!Array.isArray(results)) return null;
+  for (const meta of metas) {
+    const hit = pickBest(results, meta);
+    if (hit) return lyricsEntry(hit);
+  }
+  return null;
+}
+
+function findCandidates(msg) {
+  const duration = Number(msg.duration) > 0 ? Math.round(Number(msg.duration)) : 0;
+  const out = [];
+  const seen = new Set();
+
+  const push = (track, artist) => {
+    const t = String(track || '').trim();
+    const a = String(artist || '').trim();
+    if (!t || !a) return;
+    const key = `${t}\n${a}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ track: t, artist: a, duration });
+  };
+
+  if (Array.isArray(msg.candidates)) {
+    for (const cand of msg.candidates) {
+      if (cand) push(cand.track, cand.artist);
+    }
+  }
+  // Only fall back to the raw metadata when the content script had no parsed
+  // candidates (Spotify), otherwise it just repeats a worse query.
+  if (!out.length) push(msg.track, msg.artist);
+  return out.slice(0, MAX_FIND_CANDIDATES);
 }
 
 async function handleFindLyrics(msg) {
@@ -319,13 +390,10 @@ async function handleFindLyrics(msg) {
     };
   }
 
-  const meta = {
-    track: String(msg.track || '').trim(),
-    artist: String(msg.artist || '').trim(),
-    album: String(msg.album || '').trim(),
-    duration: Number(msg.duration) > 0 ? Math.round(Number(msg.duration)) : 0
-  };
-  if (!meta.track || !meta.artist) throw new Error('Missing track metadata');
+  const candidates = findCandidates(msg);
+  if (!candidates.length) throw new Error('Missing track metadata');
+  const album = String(msg.album || '').trim();
+  const query = String(msg.query || '').trim();
 
   const existing = inflightFinds.get(key);
   if (existing) return existing;
@@ -333,7 +401,17 @@ async function handleFindLyrics(msg) {
     const wait = 2000 - (Date.now() - lastFindLookupAt);
     if (wait > 0) await sleep(wait);
     lastFindLookupAt = Date.now();
-    const found = await lrclibLookup(meta);
+
+    let found = null;
+    for (let i = 0; i < candidates.length && !found; i++) {
+      const meta = { ...candidates[i], album: i === 0 ? album : '' };
+      // When the content script sent a title to search for, that free-text pass
+      // below is the same query for every candidate, so skip the per-candidate
+      // fallback and spend the request once.
+      found = await lrclibLookup(meta, { qFallback: !query && i === candidates.length - 1 });
+    }
+    if (!found && query) found = await lrclibSearchQuery(query, candidates);
+
     const entry = found || { found: false, instrumental: false, ts: Date.now() };
     await putCachedLyrics(key, entry);
     return {

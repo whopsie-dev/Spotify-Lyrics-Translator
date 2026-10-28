@@ -165,7 +165,252 @@
     return title && artist ? { title, artist } : null;
   }
 
+  // ---- YouTube -------------------------------------------------------------
+  // YouTube has no lyric DOM to annotate, so "find lyrics" works from video
+  // metadata instead: the description's music shelf (exact song/artist) when
+  // YouTube exposes one, otherwise the title ("Artist - Song") plus the channel.
+
+  // Bracketed parts of a YouTube title that are upload noise, not song info.
+  const YT_NOISE = new RegExp([
+    '^(?:official\\s+)?(?:(?:hd|hq|4k|8k)\\s+)?(?:music\\s+)?(?:video|audio)$',
+    '^(?:official\\s+)?(?:lyrics?|lyric\\s+video|lyric\\s+visuali[sz]er)$',
+    '^(?:official\\s+)?(?:visuali[sz]er|mv|m/v|video\\s+clip)$',
+    '^(?:hd|hq|4k|8k|2160p|1080p|720p|explicit|clean|full\\s+video)$',
+    '^(?:(?:4k|8k|hd|hq)\\s+)?remaster(?:ed)?(?:\\s+\\d{4})?$',
+    '^\\d{4}\\s+remaster(?:ed)?$',
+    '^(?:color|colour)\\s+coded$',
+    '^with\\s+lyrics$',
+    '^lyrics$',
+    '^official$'
+  ].join('|'), 'i');
+
+  function site() {
+    const host = location.hostname || '';
+    if (/(^|\.)youtube\.com$/i.test(host)) return 'youtube';
+    if (/(^|\.)spotify\.com$/i.test(host)) return 'spotify';
+    return document.querySelector('ytd-app, ytd-watch-flexy, #movie_player') ? 'youtube' : 'spotify';
+  }
+
+  function youtubeVideoId() {
+    let id = '';
+    try {
+      const u = new URL(location.href);
+      if (u.pathname === '/watch') {
+        id = u.searchParams.get('v') || '';
+      } else {
+        const m = u.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{6,})/);
+        if (m) id = m[1];
+      }
+    } catch {}
+    if (!id) {
+      const el = document.querySelector('ytd-watch-flexy[video-id]');
+      id = (el && el.getAttribute('video-id')) || '';
+    }
+    return id;
+  }
+
+  function youtubeTitle() {
+    const el = document.querySelector('ytd-watch-metadata #title h1')
+      || document.querySelector('ytd-watch-metadata h1.ytd-watch-metadata')
+      || document.querySelector('ytd-video-primary-info-renderer #title h1')
+      || document.querySelector('ytd-reel-video-renderer[is-active] #video-title')
+      || document.querySelector('ytd-reel-video-renderer[is-active] h2');
+    let title = el ? norm(el.textContent) : '';
+    if (!title) {
+      const meta = document.querySelector('meta[name="title"]');
+      title = meta ? norm(meta.content) : '';
+    }
+    if (!title) {
+      title = norm(String(document.title || '')
+        .replace(/\s*#shorts\s*$/i, '')
+        .replace(/\s*-\s*YouTube\s*$/i, ''));
+    }
+    return title;
+  }
+
+  function youtubeChannel() {
+    const el = document.querySelector('ytd-watch-metadata #owner #channel-name a')
+      || document.querySelector('ytd-watch-metadata #owner #channel-name')
+      || document.querySelector('#owner #channel-name a')
+      || document.querySelector('ytd-video-owner-renderer #channel-name a')
+      || document.querySelector('ytd-reel-video-renderer[is-active] #channel-name a');
+    return el ? norm(el.textContent) : '';
+  }
+
+  function youtubeDuration() {
+    const video = document.querySelector('#movie_player video') || document.querySelector('video');
+    if (video && Number.isFinite(video.duration) && video.duration > 0) return Math.round(video.duration);
+    const el = document.querySelector('#movie_player .ytp-time-duration');
+    return el ? Math.round(parseClock(el.textContent)) : 0;
+  }
+
+  // The description's "Music" shelf renders the official song title, artist
+  // and album as a yt-video-attribute-view-model (no stable testids).
+  function youtubeMusicShelf() {
+    const view = document.querySelector('ytd-watch-metadata ytd-horizontal-card-list-renderer yt-video-attribute-view-model')
+      || document.querySelector('#description yt-video-attribute-view-model');
+    if (!view) return null;
+    const trackEl = view.querySelector('h1, .ytVideoAttributeViewModelTitle, #video-title');
+    const track = trackEl ? norm(trackEl.textContent) : '';
+    if (!track) return null;
+    const spans = [...view.querySelectorAll('span')]
+      .map((s) => norm(s.textContent))
+      .filter(Boolean);
+    return { track, artist: spans[0] || '', album: spans[1] || '' };
+  }
+
+  function youtubeIsMusic() {
+    const genre = document.querySelector('meta[itemprop="genre"]');
+    if (genre && /^music$/i.test(norm(genre.content))) return true;
+    const channel = youtubeChannel();
+    if (/\s-\s*topic$/i.test(channel) || /vevo$/i.test(channel)) return true;
+    return !!youtubeMusicShelf();
+  }
+
+  function wordSet(text) {
+    return new Set(String(text || '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .split(' ')
+      .filter((w) => w.length > 2));
+  }
+
+  // Do two loose names ("Katy Perry" / "KatyPerryVEVO") refer to one act?
+  function entityMatch(a, b) {
+    const wa = wordSet(a);
+    const wb = wordSet(b);
+    if (!wa.size || !wb.size) return false;
+    let hits = 0;
+    for (const w of wa) if (wb.has(w)) hits++;
+    return hits >= Math.ceil(Math.min(wa.size, wb.size) * 0.6);
+  }
+
+  function isYtNoise(text) {
+    const t = norm(text).toLowerCase().replace(/[^\p{L}\p{N}/]+/gu, ' ').trim();
+    return !t || YT_NOISE.test(t);
+  }
+
+  function cleanYtTitle(raw) {
+    let text = norm(String(raw || '').replace(/[\u2013\u2014]/g, '-'));
+    if (!text) return '';
+    text = text.replace(/[([{]([^()\[\]{}]*)[)\]}]/g, (m, inner) => (isYtNoise(inner) ? ' ' : m));
+    text = text.replace(/\s+(?:official\s+)?(?:music\s+)?(?:video|audio|lyrics?|lyric\s+video|visuali[sz]er|m\/v|mv)$/i, '');
+    return norm(text);
+  }
+
+  function splitYtTitle(text) {
+    return String(text || '')
+      .split(/\s+-\s+|\s*\|\s*|\s*[•·]\s*/)
+      .map(norm)
+      .filter(Boolean);
+  }
+
+  function stripFeat(track) {
+    return norm(String(track || '')
+      .replace(/\s*[([][^)\]]*(?:feat|ft|featuring)\.?[^)\]]*[)\]]\s*/gi, ' ')
+      .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.+$/i, ' '));
+  }
+
+  function ytCleanChannel(raw) {
+    let name = norm(String(raw || ''));
+    const topic = /\s*-\s*topic$/i.test(name);
+    const vevo = /vevo$/i.test(name);
+    if (topic) name = name.replace(/\s*-\s*topic$/i, '');
+    if (vevo) name = name.replace(/vevo$/i, '');
+    name = name.replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2');
+    return { name: norm(name), topic, vevo };
+  }
+
+  function ytTitleCandidates(title, channel) {
+    const out = [];
+    const ch = ytCleanChannel(channel);
+    const clean = cleanYtTitle(title);
+    if (!clean) return out;
+
+    const add = (track, artist) => {
+      const t = norm(track);
+      const a = norm(artist);
+      if (t && a) out.push({ track: t, artist: a });
+    };
+
+    const parts = splitYtTitle(clean);
+    if (parts.length >= 2) {
+      const first = parts[0];
+      const rest = parts.slice(1).join(' - ');
+      let artist = '';
+      let track = '';
+
+      if (ch.name && entityMatch(ch.name, first)) {
+        artist = first;
+        track = rest;
+      } else if (ch.name && entityMatch(ch.name, rest)) {
+        artist = rest;
+        track = first;
+      } else if (ch.topic && ch.name) {
+        artist = ch.name;
+        track = rest;
+      }
+
+      if (artist) {
+        add(track, artist);
+        const featless = stripFeat(track);
+        if (featless && featless !== track) add(featless, artist);
+      } else {
+        // Uploads overwhelmingly use "Artist - Song"; keep the reverse order
+        // as a fallback for "Song - Artist" titles.
+        add(rest, first);
+        add(first, rest);
+      }
+    } else if (ch.name) {
+      add(clean, ch.name);
+    }
+    return out;
+  }
+
+  function youtubeTrackInfo() {
+    const id = youtubeVideoId();
+    if (!id) return null;
+    const title = youtubeTitle();
+    if (!title) return null;
+
+    const channel = youtubeChannel();
+    const duration = youtubeDuration();
+    const shelf = youtubeMusicShelf();
+    const candidates = [];
+    const seen = new Set();
+    const add = (track, artist) => {
+      const t = norm(track);
+      const a = norm(artist);
+      if (!t || !a) return;
+      const key = t.toLowerCase() + '\n' + a.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({ track: t, artist: a });
+    };
+
+    if (shelf) add(shelf.track, shelf.artist || channel);
+    for (const c of ytTitleCandidates(title, channel)) add(c.track, c.artist);
+    if (!candidates.length) return null;
+
+    return {
+      id,
+      title,
+      artist: channel || 'YouTube',
+      duration,
+      key: 'yt:' + id,
+      site: 'youtube',
+      candidates: candidates.slice(0, 5),
+      query: cleanYtTitle(title)
+    };
+  }
+
   function getTrackInfo() {
+    return site() === 'youtube' ? youtubeTrackInfo() : spotifyTrackInfo();
+  }
+
+  function spotifyTrackInfo() {
     const npw = document.querySelector('[data-testid="now-playing-widget"]')
       || document.querySelector('[data-testid*="now-playing-widget" i]');
     const bar = document.querySelector(PLAYER_BAR)
@@ -240,6 +485,9 @@
   }
 
   function lyricsPaneOpen() {
+    // YouTube never renders a lyrics pane — a music video is the equivalent of
+    // "the user is on a track that can have lyrics".
+    if (site() === 'youtube') return !!youtubeVideoId() && youtubeIsMusic();
     const candidates = document.querySelectorAll(
       LYRICS_PANE + ', [data-testid^="lyrics"]:not([data-testid^="lyrics-line"])'
     );
@@ -252,8 +500,8 @@
 
   // Spotify is showing lyrics (even a single line, e.g. the sidebar's
   // always-visible mode) — never search LRCLIB in that case.
-  function spotifyLyricsVisible() {
-    return !!document.querySelector(LINE_SELECTOR);
+  function nativeLyricsVisible() {
+    return site() !== 'youtube' && !!document.querySelector(LINE_SELECTOR);
   }
 
   function syncTrack() {
@@ -280,6 +528,10 @@
     state.findJob++;
     cancelFind();
     hidePrompt();
+    if (track.site === 'youtube') {
+      console.debug('[SLT] youtube track:', track.key, '| candidates:',
+        track.candidates.map((c) => `${c.artist} – ${c.track}`).join(' | '));
+    }
   }
 
   function lyricLines(lyrics) {
@@ -347,6 +599,8 @@
       toast(state.found.lyrics.instrumental ? 'This track is instrumental' : 'No lyrics found on LRCLIB', { err: true });
       return;
     }
+    console.debug(`[SLT] showing LRCLIB lyrics (${lines.length} lines)`,
+      state.found.lyrics.artistName, '–', state.found.lyrics.trackName);
 
     const el = document.createElement('div');
     el.id = 'slt-lrc';
@@ -388,7 +642,7 @@
   function scheduleFind() {
     if (!settings.findLyrics || state.panel || !state.track) return;
     if (!lyricsPaneOpen()) return;
-    if (spotifyLyricsVisible()) return;
+    if (nativeLyricsVisible()) return;
     if (state.findTimer) return;
     if (Date.now() < state.findRetryAt) return;
 
@@ -405,7 +659,7 @@
 
     if (!force) {
       if (!settings.findLyrics || !lyricsPaneOpen()) return;
-      if (findLines() || spotifyLyricsVisible()) return;
+      if (findLines() || nativeLyricsVisible()) return;
       if (state.finding === track.key) return;
       if (state.noLyricsFor === track.key || state.dismissedFor === track.key || state.promptedFor === track.key) return;
       console.debug('[SLT] auto-find: lyrics view open with no lines rendered — searching LRCLIB');
@@ -421,7 +675,9 @@
       track: track.title,
       artist: track.artist,
       duration: track.duration,
-      refresh: !!force
+      refresh: !!force,
+      query: track.query || '',
+      candidates: track.candidates || null
     });
     if (job !== state.findJob || !state.track || state.track.key !== track.key) {
       hideToast();
@@ -430,7 +686,7 @@
     state.finding = null;
     state.findRetryAt = 0;
     hideToast();
-    if (!force && (!settings.findLyrics || findLines() || spotifyLyricsVisible() || !lyricsPaneOpen())) return;
+    if (!force && (!settings.findLyrics || findLines() || nativeLyricsVisible() || !lyricsPaneOpen())) return;
 
     if (!res || !res.ok) {
       toast((res && res.error) || 'Could not reach LRCLIB', { err: true });
@@ -455,7 +711,7 @@
   function manualFind() {
     const track = getTrackInfo();
     if (!track) {
-      toast('Play a song on Spotify first', { err: true });
+      toast(site() === 'youtube' ? 'Open a YouTube video first' : 'Play a song on Spotify first', { err: true });
       return;
     }
     if (state.panel && state.track && state.track.key === track.key) {
@@ -543,6 +799,14 @@
         console.debug(`[SLT] lyrics found via panel (${mine.length} lines)`);
       }
       return mine;
+    }
+
+    // On YouTube only the extension's own panel counts as lyrics — the page
+    // itself has no lyric lines, and guessing from page text would annotate
+    // descriptions or comments.
+    if (site() === 'youtube') {
+      state.method = null;
+      return null;
     }
 
     let els = bySelector();
@@ -731,7 +995,9 @@
     state.lastManualTranslateAt = now;
     const r = scan();
     if (!r) {
-      toast('Open the lyrics view on Spotify first', { err: true });
+      toast(site() === 'youtube'
+        ? 'Press Alt+L to find lyrics for this video first'
+        : 'Open the lyrics view on Spotify first', { err: true });
       return;
     }
     clearTimeout(state.startTimer);

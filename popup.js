@@ -60,7 +60,7 @@ async function refreshCount() {
 async function action(type) {
   $('status').textContent = '';
   if (!(await toTab({ type }))) {
-    $('status').textContent = 'Open open.spotify.com and refresh the tab first.';
+    $('status').textContent = 'Open Spotify or a YouTube video, then refresh the tab first.';
   }
 }
 
